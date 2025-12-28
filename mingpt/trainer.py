@@ -3,12 +3,15 @@ Simple training loop; Boilerplate that could apply to any arbitrary neural netwo
 so nothing in this file really has anything to do with GPT specifically.
 """
 
+from copy import deepcopy
 import time
 from collections import defaultdict
 
 import torch
 from torch.utils.data.dataloader import DataLoader
 from mingpt.utils import CfgNode as CN
+import torch.nn.functional as F
+
 
 class Trainer:
 
@@ -24,8 +27,10 @@ class Trainer:
         C.batch_size = 64
         C.learning_rate = 3e-4
         C.betas = (0.9, 0.95)
-        C.weight_decay = 0.1 # only applied on matmul weights
+        C.weight_decay = 0.1  # only applied on matmul weights
         C.grad_norm_clip = 1.0
+        C.dpo_loss = False
+        C.dpo_beta = 0.1
         return C
 
     def __init__(self, config, model, train_dataset):
@@ -58,6 +63,19 @@ class Trainer:
         for callback in self.callbacks.get(onevent, []):
             callback(self)
 
+    @staticmethod
+    def dpo_step(model, ref_model, x_w, y_w, x_l, y_l, beta):
+        pi_yw_logps = model.log_prob(x_w, y_w)
+        pi_yl_logps = model.log_prob(x_l, y_l)
+        with torch.no_grad():
+            ref_yw_logps = ref_model.log_prob(x_w, y_w)
+            ref_yl_logps = ref_model.log_prob(x_l, y_l)
+        lambda_w = pi_yl_logps / (pi_yl_logps + pi_yw_logps)
+        y_w_ratio = pi_yw_logps - ref_yw_logps
+        y_l_ratio = pi_yl_logps - ref_yl_logps
+        loss = -F.logsigmoid(beta * (lambda_w * y_w_ratio - (1 - lambda_w) * y_l_ratio))
+        return loss.mean()
+
     def run(self):
         model, config = self.model, self.config
 
@@ -75,11 +93,14 @@ class Trainer:
         )
 
         model.train()
+        ref_model = deepcopy(model)
+        ref_model.requires_grad_(False)
+        ref_model.eval()
+
         self.iter_num = 0
         self.iter_time = time.time()
         data_iter = iter(train_loader)
         while True:
-
             # fetch the next batch (x, y) and re-init iterator if needed
             try:
                 batch = next(data_iter)
@@ -87,10 +108,21 @@ class Trainer:
                 data_iter = iter(train_loader)
                 batch = next(data_iter)
             batch = [t.to(self.device) for t in batch]
-            x, y = batch
-
-            # forward the model
-            logits, self.loss = model(x, y)
+            x, y, x_l, y_l = batch
+            
+            if config.dpo_loss:
+                self.loss = self.dpo_step(
+                    model=model,
+                    ref_model=ref_model,
+                    x_w=x,
+                    y_w=y,
+                    x_l=x_l,
+                    y_l=y_l,
+                    beta=config.dpo_beta
+                )
+            else:
+                # forward the model
+                _, self.loss = model(x, y)
 
             # backprop and update the parameters
             model.zero_grad(set_to_none=True)

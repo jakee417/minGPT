@@ -80,16 +80,17 @@ class Block(nn.Module):
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.mlp = nn.ModuleDict(dict(
             c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd),
-            c_proj  = nn.Linear(4 * config.n_embd, config.n_embd),
             act     = NewGELU(),
+            c_proj  = nn.Linear(4 * config.n_embd, config.n_embd),
             dropout = nn.Dropout(config.resid_pdrop),
         ))
-        m = self.mlp
-        self.mlpf = lambda x: m.dropout(m.c_proj(m.act(m.c_fc(x)))) # MLP forward
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        x = x + self.mlpf(self.ln_2(x))
+        z = self.ln_2(x)
+        for layer in self.mlp:
+            z = self.mlp[layer](z)
+        x = x + z
         return x
 
 class GPT(nn.Module):
@@ -278,6 +279,24 @@ class GPT(nn.Module):
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
 
         return logits, loss
+    
+    def log_prob(self, idx, targets):
+        """
+        Compute the log probability of a sequence of predictions.
+        """
+        logits, _ = self(idx, targets)
+        B = logits.size(0)
+        V = logits.size(-1)
+        log_probs = F.log_softmax(logits, dim=-1)
+        targets_mask = targets != -1
+        targets_masked = torch.masked_select(targets, targets_mask).reshape(B, -1, 1)
+        log_probs_masked = torch.masked_select(log_probs, targets_mask.unsqueeze(-1)).reshape(
+            B, -1, V
+        )
+        log_probs = torch.gather(log_probs_masked, dim=-1, index=targets_masked).reshape(
+            B, -1
+        )
+        return log_probs.sum(dim=-1)
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, do_sample=False, top_k=None):
