@@ -30,6 +30,7 @@ class Trainer:
         C.weight_decay = 0.1  # only applied on matmul weights
         C.grad_norm_clip = 1.0
         C.dpo_loss = False
+        C.dpo_alpha = 1.0
         C.dpo_beta = 0.1
         return C
 
@@ -64,7 +65,7 @@ class Trainer:
             callback(self)
 
     @staticmethod
-    def dpo_step(model, ref_model, x_w, y_w, x_l, y_l, beta):
+    def dpo_step(model, ref_model, x_w, y_w, x_l, y_l, alpha, beta):
         pi_yw_logps = model.log_prob(x_w, y_w)
         pi_yl_logps = model.log_prob(x_l, y_l)
         with torch.no_grad():
@@ -73,7 +74,7 @@ class Trainer:
         lambda_w = pi_yl_logps / (pi_yl_logps + pi_yw_logps)
         y_w_ratio = pi_yw_logps - ref_yw_logps
         y_l_ratio = pi_yl_logps - ref_yl_logps
-        loss = -F.logsigmoid(beta * (lambda_w * y_w_ratio - (1 - lambda_w) * y_l_ratio))
+        loss = -F.logsigmoid(beta * (lambda_w * alpha * y_w_ratio - (1 - lambda_w) * y_l_ratio))
         return loss.mean()
 
     def run(self):
@@ -118,6 +119,7 @@ class Trainer:
                     y_w=y,
                     x_l=x_l,
                     y_l=y_l,
+                    alpha=config.dpo_alpha,
                     beta=config.dpo_beta
                 )
             else:
