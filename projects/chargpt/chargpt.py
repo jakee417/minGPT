@@ -79,7 +79,7 @@ class CharDataset(Dataset):
         # return as tensors
         x = torch.tensor(dix[:-1], dtype=torch.long)
         y = torch.tensor(dix[1:], dtype=torch.long)
-        return x, y
+        return x, y, x, y
 
 # -----------------------------------------------------------------------------
 

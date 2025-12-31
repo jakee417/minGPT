@@ -284,7 +284,20 @@ class GPT(nn.Module):
         """
         Compute the log probability of a sequence of predictions.
         """
-        logits, _ = self(idx, targets)
+        logits, _ = self(idx)
+        return self._log_prob(logits, targets).sum(dim=-1)
+    
+    @staticmethod
+    def _log_prob(logits, targets):
+        """
+        log probability of logits matching targets.
+        
+        :param logits: (B, S, V)
+        :param targets: (B, S)
+        """
+        assert logits.size(0) == targets.size(0)
+        assert logits.size(1) == targets.size(1)
+        assert len(logits.size()) == 3
         B = logits.size(0)
         V = logits.size(-1)
         log_probs = F.log_softmax(logits, dim=-1)
@@ -296,15 +309,16 @@ class GPT(nn.Module):
         log_probs = torch.gather(log_probs_masked, dim=-1, index=targets_masked).reshape(
             B, -1
         )
-        return log_probs.sum(dim=-1)
+        return log_probs
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, do_sample=False, top_k=None):
+    def generate(self, idx, max_new_tokens, temperature=1.0, do_sample=False, top_k=None, do_log_prob=False):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
+        log_probs = torch.tensor([]).to(idx.device)
         for _ in range(max_new_tokens):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.block_size else idx[:, -self.block_size:]
@@ -323,7 +337,9 @@ class GPT(nn.Module):
                 idx_next = torch.multinomial(probs, num_samples=1)
             else:
                 _, idx_next = torch.topk(probs, k=1, dim=-1)
+            if do_log_prob:
+                log_prob = self._log_prob(logits=logits.unsqueeze(1), targets=idx_next)
+                log_probs = torch.cat((log_probs, log_prob), dim=-1)
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
-
-        return idx
+        return idx, log_probs
