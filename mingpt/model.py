@@ -303,13 +303,10 @@ class GPT(nn.Module):
         log_probs = F.log_softmax(logits, dim=-1)
         targets_mask = targets != -1
         targets_masked = torch.masked_select(targets, targets_mask).reshape(B, -1, 1)
-        log_probs_masked = torch.masked_select(log_probs, targets_mask.unsqueeze(-1)).reshape(
-            B, -1, V
-        )
-        log_probs = torch.gather(log_probs_masked, dim=-1, index=targets_masked).reshape(
-            B, -1
-        )
-        return log_probs
+        log_probs_masked = torch.masked_select(log_probs, targets_mask.unsqueeze(-1))
+        log_probs_masked = log_probs_masked.reshape(B, -1, V)
+        log_probs = torch.gather(log_probs_masked, dim=-1, index=targets_masked)
+        return log_probs.reshape(B, -1)
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, do_sample=False, top_k=None, do_log_prob=False):
